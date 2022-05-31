@@ -10,6 +10,7 @@
 #include "../bench/bench.h"
 #include "interface.h"
 #include "../include/utils/kvssd.h"
+#include<sys/time.h>
 
 #define TIME_LIMIT 0
 #define MAX_THREADS 100
@@ -38,6 +39,9 @@ int base_sleep = 1;
 int time_limit;
 
 int cpu_idling = 0;
+
+struct timeval start, end;
+double diff;
 
 //Check how many threads are not done
 int number_of_running_threads()
@@ -213,6 +217,7 @@ void *sched(void *param)
 //Main work thread, doesn't do much
 void *work(void *param)
 {
+    int max = 0;
     bench_value *value;
     int number = *((int *)param);
     while(threads_running && !finished_current_period[number])
@@ -229,7 +234,13 @@ void *work(void *param)
                 value = get_bench();
                 //printf("%d   ", value->key);
                 if(value->type==FS_SET_T){
+                    gettimeofday(&start,NULL);
                     inf_make_req(value->type,value->key,NULL,value->length,value->mark);
+                    gettimeofday(&end,NULL);
+                    diff = (end.tv_sec *1000000 + end.tv_usec  - start.tv_sec*1000000 - start.tv_usec);
+                    if(max < diff)
+                        max = diff;
+                    printf("write time : %.2f us\n",diff);
                 }
                 else if(value->type==FS_GET_T){
                     inf_make_req(value->type,value->key,NULL,value->length,value->mark);
@@ -335,7 +346,7 @@ int main(int argc,char* argv[]){
     pthread_attr_t timer_attr, sch_attr, work_attr;
 
     //Set up the attribute for the workers
-    int policy = SCHED_RR;
+  /*  int policy = SCHED_RR;
     pthread_attr_init(&work_attr);
     pthread_attr_setscope(&work_attr, PTHREAD_SCOPE_SYSTEM);
     pthread_attr_setschedpolicy(&work_attr, policy);
@@ -362,19 +373,25 @@ int main(int argc,char* argv[]){
 
     pthread_join(timer_tid, NULL);
     pthread_join(sch_tid, NULL);
+*/
+  float max = 0;
+	while((value=get_bench())){
 
-	/*while((value=get_bench())){
-
-    printf("value  : 0x%x %d %d %d\n", value->key,value->length, value->mark, value->type);
+    //printf("value  : 0x%x %d %d %d\n", value->key,value->length, value->mark, value->type);
 
 		if(value->type==FS_SET_T){
-			inf_make_req(value->type,value->key,NULL,value->length,value->mark);
+		// gettimeofday(&start,NULL);
+                    inf_make_req(value->type,value->key,NULL,value->length,value->mark);
+                  //  gettimeofday(&end,NULL);
+                   // diff = (end.tv_sec *1000000 + end.tv_usec  - start.tv_sec*1000000 - start.tv_usec);
+                   
+                  //  printf("write time : %.2f us\n",diff);
 		}
 		else if(value->type==FS_GET_T){
 			inf_make_req(value->type,value->key,NULL,value->length,value->mark);
 		}
-	}*/
-
+	}
+    
 	inf_free();
 	return 0;
 }
