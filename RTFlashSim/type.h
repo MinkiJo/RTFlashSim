@@ -1,6 +1,8 @@
 #include "mh.h"
 #include "queue.h"
 
+#ifndef TYPE_H
+#define TYPE_H
 typedef struct page_t{
     uint32_t data;
     uint8_t valid;
@@ -10,7 +12,7 @@ typedef struct page_t{
 typedef struct block_t{
     page_t page[PPB];
     uint32_t channel;
-    bool free; 
+    bool free;
     uint32_t index;
     uint32_t cur; //for current write index
     uint32_t wear;
@@ -26,3 +28,5 @@ typedef struct flash{
     block_t * block;
     channel_t * channel;
 }flash_t;
+
+#endif

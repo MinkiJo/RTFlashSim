@@ -17,6 +17,7 @@ typedef struct{
  void init_heap(heap*h){
      h->size = 0;
  }
+ 
 void insert_heap(heap* h, int key, int index){
     element item;
     item.key = key;

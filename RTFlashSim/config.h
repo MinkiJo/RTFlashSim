@@ -13,7 +13,7 @@
 #define PPB 32
 #define NOB (32)
 #define NOP (PPB*NOB)
-#define NOC 4
+#define NOC 1
 
 #define RNOB (NOB * NOC)
 #define RNOP (PPB * RNOB)

@@ -1,167 +1,82 @@
 #include <stdio.h>
-#include<stdlib.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <limits.h>
+
 #include "queue.h"
 #include "mh.h"
 #include "type.h"
 #include "config.h"
-
+#include "flash.h"
+#include "task.h"
 
 
 uint32_t page_map[RNOP];
 flash_t * dev;
 uint32_t cur_blk = 0, gc_cur_ch = 0, cur_ch= 0;
+uint32_t total_write, total_read, total_gc, gc_write, gc_read,avg_wear; 
 
-void set_write_target();
+int tasks_running = 1;
 
-void flash_init(){ 
-    int i,j;
-    dev = (flash_t*)malloc(sizeof(flash_t));
+int time_count = 1;
+int num_tasks = 6;
+int current_task = -1;
 
-    dev->channel = (channel_t*)malloc(sizeof(channel_t) * NOC);
-    dev->block = (block_t*)malloc(sizeof(block_t) * RNOB);    
-    
-    int ch_cnt = 0;
-    for(i=0;i<NOB * NOC;i++){
-        for(j=0;j<PPB;j++){
-            dev->block[i].page[j].valid = ERASE;
-        }
+sem_t timer;
+sem_t ready[MAX_TASKS];
 
-        dev->block[i].channel = ch_cnt++;
-        if(ch_cnt == NOC)
-            ch_cnt = 0;
-        dev->block[i].cur = 0;
-        dev->block[i].index  = i;
-        dev->block[i].wear = 0;
-        dev->block[i].invalid_num = 0;
-    }
+int exec_times[MAX_TASKS];
+int current_exec_times[MAX_TASKS];
+int period_times[MAX_TASKS];
 
-    for(i=0;i<NOC;i++){
-        init_queue(&(dev->channel[i].freeblock));
-        init_heap(&(dev->channel[i].usingblock));
-    }
+int next_period[MAX_TASKS];
+int finished_current_period[MAX_TASKS];
 
-    for(i=0;i<NOB;i++){
-        for(int j=0;j<NOC;j++){
-            enqueue(&(dev->channel[j].freeblock),i*NOC + j);
-        }
-    }
+int base_sleep = 1;
 
-    for(i=0;i<RNOP;i++){
-        page_map[i] = UINT32_MAX;
-    }
-   set_write_target();
-}
+int time_limit;
 
-
-void invlidate_page(uint32_t ppa){
-    uint32_t block_idx = ppa / PPB;
-    uint32_t page_idx = ppa % PPB ;
-
-    dev->block[block_idx].page[page_idx].valid = INVALID;    
-    dev->block[block_idx].invalid_num++;
-}
-
-uint32_t get_write_addr(){
-    return cur_blk*PPB + dev->block[cur_blk].cur;
-}
-
-void set_write_target(){
-    cur_blk = dequeue(&(dev->channel[cur_ch].freeblock));
-    if(cur_blk == -1){ // no more free block!
-        abort(); 
-    }    
-    cur_ch = (cur_ch + 1) % NOC;
-}
-
-
-void write_flash(uint32_t data){
-    uint32_t cur = dev->block[cur_blk].cur++;
-    uint32_t ch = dev->block[cur_blk].channel;
-    uint32_t inv = dev->block[cur_blk].invalid_num;
-
-    dev->block[cur_blk].page[cur].data = data;
-    dev->block[cur_blk].page[cur].valid = VALID; 
-
-    if(cur >= PPB-1) {
-        insert_heap(&(dev->channel[ch].usingblock), cur_blk, inv);
-        set_write_target();
-    }
-    return;
-}
-
-void write_page(uint32_t lba, uint32_t data){
-    uint32_t ppa = page_map[lba];
-    if(page_map[lba] != UINT32_MAX){
-        invlidate_page(ppa);
-    }
-    page_map[lba] = get_write_addr();
-    write_flash(data);
-    return;
-}  
-
-uint32_t read_flash(uint32_t bidx, uint32_t pidx){
-    return dev->block[bidx].page[pidx].data;
-}
-
-uint32_t read_page(uint32_t lba){
-    uint32_t ppa = page_map[lba];
-    if(ppa == UINT32_MAX){
-        printf("wrong read!!\n");
-        abort();
-    }    
-
-    uint32_t block_idx = ppa / PPB;
-    uint32_t page_idx = ppa % PPB ;
-    return read_flash(block_idx, page_idx);    
-}
-
-void gc_flash(){
-    uint32_t gc_target =  delete_heap(&(dev->channel[gc_cur_ch].usingblock));
-    printf("target = %d", gc_target);
-    for(int i=0;i<PPB;i++){
-        if(dev->block[gc_target].page[i].valid == VALID){
-            uint32_t data = read_flash(gc_target,i);
-            write_flash(data);
-        }            
-        dev->block[gc_target].page[i].valid == ERASE;
-    }
-    enqueue(&(dev->channel[gc_cur_ch].freeblock),gc_target);
-    dev->block[gc_target].wear += 5;
-    gc_cur_ch = (gc_cur_ch + 1) % NOC;
-}
-
+int cpu_idling = 0;
 
 int main(int argc, char*argv[]){
+    int i;
+    pthread_t timer_tid, sch_tid, task_tid[num_tasks];
+    pthread_attr_t timer_attr, sch_attr, task_attr;
+
     flash_init();
-    write_page(0x01, 3);
-    printf("%d", read_page(0x01));
-    write_page(0x01, 4);
-    printf("%d", read_page(0x01));
-    for(int i=0;i<RNOP/4;i++){
-        write_page(0x01, 5);
+    task_init();    
     
-    }gc_flash();
-for(int i=0;i<RNOP/4;i++){
-        write_page(0x01, 5);
+    int policy = SCHED_RR;
+    pthread_attr_init(&task_attr);
+    pthread_attr_setscope(&task_attr, PTHREAD_SCOPE_SYSTEM);
+    pthread_attr_setschedpolicy(&task_attr, policy);
     
-    }gc_flash();
-for(int i=0;i<RNOP/4;i++){
-        write_page(0x01, 5);
-    
-    }gc_flash();
-for(int i=0;i<RNOP/4;i++){
-        write_page(0x01, 5);
-    
-    }gc_flash();
+    //Create each task
+    int nums[] = {0,1,2,3,4,5,6,7,8,9};    
+    pthread_create(&task_tid[0], &task_attr, task0_write, (void *)&nums[0]);
+    pthread_create(&task_tid[1], &task_attr, task1_write, (void *)&nums[1]);
+    pthread_create(&task_tid[2], &task_attr, task2_write, (void *)&nums[2]);
 
+    pthread_create(&task_tid[3], &task_attr, task0_gc, (void *)&nums[3]);
+    pthread_create(&task_tid[4], &task_attr, task1_gc, (void *)&nums[4]);
+    pthread_create(&task_tid[5], &task_attr, task2_gc, (void *)&nums[5]);
 
-    printf("%d", read_page(0x01));
-    gc_flash();
-    printf("%d", read_page(0x01));
-  
+    pthread_attr_init(&timer_attr);
+    pthread_create(&timer_tid, &timer_attr, timer_task, NULL);
+
+    pthread_attr_init(&sch_attr);
+    pthread_create(&sch_tid, &sch_attr, sched_task, NULL);
+    
+
+    for(i = 0; i < num_tasks; i++) pthread_join(task_tid[i], NULL);
+    pthread_join(timer_tid, NULL);
+    pthread_join(sch_tid, NULL);
+
+    result_info();
     return 0;
 }
 

@@ -1,5 +1,5 @@
 all : 
-	gcc -o driver main.c
+	gcc main.c -lpthread -g3 -Wall -o ./test
 
 #all : main.o queue.o
 #	gcc -g -o main main.o queue.o
@@ -11,5 +11,5 @@ all :
 #	gcc -c queue.c
 
 clean :
-	rm driver
+	rm test
 	
