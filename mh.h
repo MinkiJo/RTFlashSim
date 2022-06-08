@@ -18,6 +18,12 @@ typedef struct{
      h->size = 0;
  }
  
+ void print_heap(heap * h){
+     printf("\nheap\n");
+     for(int i=0;i<h->size;i++){
+         printf("%d ", h->heap[i].key);
+     }printf("\n");
+ }
 void insert_heap(heap* h, int key, int index){
     element item;
     item.key = key;
@@ -27,7 +33,7 @@ void insert_heap(heap* h, int key, int index){
     i = ++(h->size);   
     
  
-    while( (i != 1) && (item.key < h->heap[i/2].key) ){
+    while( (i != 1) && (item.key > h->heap[i/2].key) ){
         h->heap[i] = h->heap[i/2];    
         i /= 2;     
     }    

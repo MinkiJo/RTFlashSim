@@ -4,31 +4,31 @@
 #include <unistd.h>
 #include <semaphore.h>
 #include <limits.h>
+#include "config.h"
+#include "flash.h"
 
-#define MAX_TASKS 100
-
-
-extern int tasks_running;
-
-extern int time_count;
+#define MAX_TASKS 10
 extern int num_tasks;
-extern int current_task;
 
-extern sem_t timer;
-extern sem_t ready[MAX_TASKS];
+int tasks_running = 1;
+int time_count = 1;
+int current_task = -1;
 
-extern int exec_times[MAX_TASKS];
-extern int current_exec_times[MAX_TASKS];
-extern int period_times[MAX_TASKS];
+sem_t timer;
+sem_t ready[MAX_TASKS];
 
-extern int next_period[MAX_TASKS];
-extern int finished_current_period[MAX_TASKS];
+int exec_times[MAX_TASKS];
+int current_exec_times[MAX_TASKS];
+int period_times[MAX_TASKS];
+int next_period[MAX_TASKS];
+int finished_current_period[MAX_TASKS];
+int task_read[MAX_TASKS];
+int task_write[MAX_TASKS];
 
-extern int base_sleep ;
+int base_sleep = 1;
+int time_limit;
+int cpu_idling = 0;
 
-extern int time_limit;
-
-extern int cpu_idling;
 
 
 void task_init(){
@@ -48,19 +48,55 @@ void task_init(){
     }
 
     /* config task e,p */
-    exec_times[0] = 10;
-    exec_times[1] = 10;
-    exec_times[2] = 10;
-     exec_times[3] = 30;
-    exec_times[4] = 30;
-    exec_times[5] = 30;
+    /* task read, write pages */
+    /*  Page Read = 10 us
+        Page Write = 100 us
+        Page Erase = 500 us
+    */
 
-    period_times[0] = 40;
-    period_times[1] = 40;
-    period_times[2] = 40;
-    period_times[3] = 800;
-    period_times[4] = 300;
-    period_times[5] = 500;
+    task_read[0] = 0;
+    task_read[1] = 0;
+    task_read[2] = 0;
+
+    task_write[0] = 5;
+    task_write[1] = 20;
+    task_write[2] = 18;
+
+    exec_times[0] = 1 * task_write[0];
+    exec_times[1] = 1 * task_write[1];
+    exec_times[2] = 1 * task_write[2];
+
+    /* E + (pi-a)(R+W) * gc_num */
+    //exec_times[3] = (500 + (PPB-ALPHA)*(10 + 100)); 
+    //exec_times[4] = (500 + (PPB-ALPHA)*(10 + 100));
+    //exec_times[5] = (500 + (PPB-ALPHA)*(10 + 100));
+
+    exec_times[3] = (5 + (PPB-ALPHA)*(1)); 
+    exec_times[4] = (5 + (PPB-ALPHA)*(1));
+    exec_times[5] = (5 + (PPB-ALPHA)*(1));
+
+    period_times[0] = 100; // 10 ms
+    period_times[1] = 240; // 24 ms
+    period_times[2] = 160; // 16 ms
+    
+    if(task_write[0] > ALPHA){
+        period_times[3] = period_times[0] / (task_write[0]/ALPHA + 1); 
+    }else{
+        period_times[3] = period_times[0] * (ALPHA / task_write[0]); 
+    }
+    
+    if(task_write[1] > ALPHA){
+        period_times[4] = period_times[1] / (task_write[1]/ALPHA + 1); 
+    }else{
+        period_times[4] = period_times[1] * (ALPHA / task_write[1]); 
+    }
+
+    if(task_write[2] > ALPHA){
+        period_times[5] = period_times[2] / (task_write[1]/ALPHA + 1); 
+    }else{
+        period_times[5] = period_times[2] * (ALPHA / task_write[1]); 
+    }
+
 
     for(i = 0; i < num_tasks; i++)
     {
@@ -71,7 +107,7 @@ void task_init(){
     //printf("How long do you want to execute this program : ");
     //scanf("%d", &time_limit);
 
-    time_limit = 300;
+    time_limit = 100000;
 
 
     /* edf schedulability check */
@@ -81,10 +117,13 @@ void task_init(){
         sum += ((float)exec_times[i])/period_times[i];
     }
     
+    
     if(sum > 1)
     {
-        printf("These tasks cannot be scheduled\n");
+        printf("These tasks cannot be scheduled, total utilization = %f\n", sum);
         abort();
+    }else{
+        printf("total utilization : %f\n", sum);
     }
 
 
@@ -95,7 +134,7 @@ void task_init(){
     sem_init(&timer, 0, 0);
 }
 
-int number_of_running_threads()
+int num_of_running_threads()
 {
     int count = 0;
     int i = 0;
@@ -140,7 +179,7 @@ void check_threads_for_new_period()
   
         else if(next_period[i] == time_count && finished_current_period[i] == 0)
         {
-            printf("WE MISSED A DEADLINE");
+            printf("Missed Deadline! \n");
         }
     }
 }
@@ -174,9 +213,9 @@ void *timer_task(void *param)
         nanosleep((const struct timespec[]) {{0, 5000000L}}, NULL);
 
         printf("%d\n", time_count);
-        time_count++;
+        time_count += 1;
         
-        if(time_count == time_limit)
+        if(time_count >= time_limit)
         {
             tasks_running = 0;
             sem_post(&timer);
@@ -211,7 +250,7 @@ void *sched_task(void *param)
     {
         sem_wait(&timer);
         
-        if(time_count == time_limit)
+        if(time_count >= time_limit)
         {
             printf("Test end!!!!\n");
             break;
@@ -246,6 +285,8 @@ void *sched_task(void *param)
 
 void *task0_write(void *param)
 {
+ 
+    uint32_t w_addr;
     int number = *((int*) param);
     while(tasks_running && !finished_current_period[number])
     {
@@ -253,21 +294,22 @@ void *task0_write(void *param)
         if(finished_current_period[number])
             break;
         current_task = number;
-     
+ 
         if(tasks_running)
             printf("\ttask[%d] [write]\n", number);
-
-        for(int i=0;i<20;i++){
-            write_page(0x01, 3);
+        
+        for(int i=0;i<task_write[0];i++){
+            w_addr = (int)(rand() % RNOP * (1-OP));          
+            write_page(w_addr, 3);
         }
     }    
-
     return NULL;
 }
 
 
 void *task1_write(void *param)
 {
+    uint32_t w_addr;
     int number = *((int *)param);
     while(tasks_running && !finished_current_period[number])
     {
@@ -279,8 +321,11 @@ void *task1_write(void *param)
         if(tasks_running)
             printf("\ttask[%d] [write]\n", number);
 
-        for(int i=0;i<32;i++)
-            write_page(0x01, 3);
+    
+        for(int i=0;i<task_write[1];i++){
+            w_addr = (int)(rand() % RNOP * (1-OP));
+            write_page(w_addr, 3);
+        }
     
     }    
     return NULL;
@@ -289,6 +334,7 @@ void *task1_write(void *param)
 
 void *task2_write(void *param)
 {
+    uint32_t w_addr;
     int number = *((int *)param);
     while(tasks_running && !finished_current_period[number])
     {
@@ -298,10 +344,12 @@ void *task2_write(void *param)
         current_task = number;
      
         if(tasks_running)
-            printf("\ttask[%d] [write]\n", number);
-
-        for(int i=0;i<40;i++)
-            write_page(0x01, 3);
+            printf("\ttask[%d] [write]\n", number);        
+      
+        for(int i=0;i<task_write[2];i++){
+            w_addr = (int)(rand() % RNOP * (1-OP));
+            write_page(w_addr, 3);
+        }
     
     }    
     return NULL;
@@ -317,11 +365,12 @@ void *task0_gc(void *param)
         if(finished_current_period[number])
             break;
         current_task = number;
-     
-        if(tasks_running)
-            printf("\ttask[%d] [garbage collection]\n", number);
+  
+        if(tasks_running){
+            printf("\ttask[%d] [garbage collection]\n", number);        
+            gc_flash();
+        }
 
-        gc_flash();
     
     }    
 
@@ -337,15 +386,12 @@ void *task1_gc(void *param)
         if(finished_current_period[number])
             break;
         current_task = number;
-     
-        if(tasks_running)
-            printf("\ttask[%d] [garbage collection]\n", number);
-
-         gc_flash();
-    
-    
+ 
+        if(tasks_running){
+            printf("\ttask[%d] [garbage collection]\n", number);         
+            gc_flash();
+        }   
     }    
-
     return NULL;
 }
 
@@ -358,14 +404,11 @@ void *task2_gc(void *param)
         if(finished_current_period[number])
             break;
         current_task = number;
-     
-        if(tasks_running)
-            printf("\ttask[%d] [garbage collection]\n", number);
-
-        gc_flash();
-    
-    
+  
+        if(tasks_running ){
+                printf("\ttask[%d] [garbage collection]\n", number);
+                gc_flash();
+        } 
     }    
-
     return NULL;
 }

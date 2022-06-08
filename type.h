@@ -12,7 +12,7 @@ typedef struct page_t{
 typedef struct block_t{
     page_t page[PPB];
     uint32_t channel;
-    bool free;
+    uint8_t free;
     uint32_t index;
     uint32_t cur; //for current write index
     uint32_t wear;

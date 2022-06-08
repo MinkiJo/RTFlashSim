@@ -7,8 +7,6 @@
 #include <semaphore.h>
 #include <limits.h>
 
-#include "queue.h"
-#include "mh.h"
 #include "type.h"
 #include "config.h"
 #include "flash.h"
@@ -18,30 +16,8 @@
 uint32_t page_map[RNOP];
 flash_t * dev;
 uint32_t cur_blk = 0, gc_cur_ch = 0, cur_ch= 0;
-uint32_t total_write, total_read, total_gc, gc_write, gc_read,avg_wear; 
-
-int tasks_running = 1;
-
-int time_count = 1;
+uint32_t total_write, total_read, total_gc, gc_write, gc_read,avg_wear, ipage_num; 
 int num_tasks = 6;
-int current_task = -1;
-
-sem_t timer;
-sem_t ready[MAX_TASKS];
-
-int exec_times[MAX_TASKS];
-int current_exec_times[MAX_TASKS];
-int period_times[MAX_TASKS];
-
-int next_period[MAX_TASKS];
-int finished_current_period[MAX_TASKS];
-
-int base_sleep = 1;
-
-int time_limit;
-
-int cpu_idling = 0;
-
 int main(int argc, char*argv[]){
     int i;
     pthread_t timer_tid, sch_tid, task_tid[num_tasks];
